@@ -74,7 +74,7 @@ loaded_vector_store = FAISS.load_local(
 embeddings, allow_dangerous_deserialization=True
 )
 
-retriever = loaded_vector_store.as_retriever(search_type="mmr", search_kwargs={"k": 3})
+retriever = loaded_vector_store.as_retriever(search_type="mmr", search_kwargs={"k": 2})
 
 model_version = "gpt2"
 tokenizer = AutoTokenizer.from_pretrained(model_version)
