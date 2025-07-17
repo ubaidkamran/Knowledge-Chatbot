@@ -86,7 +86,7 @@ pipe = pipeline(
     model=model,
     tokenizer=tokenizer,
     max_new_tokens=256,
-    temperature=0.7
+    temperature=0.5
 )
 # Wrap the pipeline for LangChain compatibility
 llm = HuggingFacePipeline(pipeline=pipe)
