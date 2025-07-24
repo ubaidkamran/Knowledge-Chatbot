@@ -12,84 +12,91 @@ from langchain_community.llms import HuggingFacePipeline
 from transformers import pipeline
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 def get_answer(question):
     result = rag_chain({"query": question})
     # Extract the generated answer
     return result["result"].split("Answer:")[1].strip()
+@st.cache_resource
+def main_code():
+    #Creating embeddings
+    model_name = "sentence-transformers/all-MiniLM-L6-v2"
+    embeddings = HuggingFaceEmbeddings(model_name=model_name)
 
-#Creating embeddings
-model_name = "sentence-transformers/all-MiniLM-L6-v2"
-embeddings = HuggingFaceEmbeddings(model_name=model_name)
+    #Making a FAISS Vector store
+    index = faiss.IndexFlatL2(len(embeddings.embed_query("hello world")))
+    vector_store = FAISS(
+        embedding_function=embeddings,
+        index=index,
+        docstore=InMemoryDocstore(),
+        index_to_docstore_id={},
+    )
 
-#Making a FAISS Vector store
-index = faiss.IndexFlatL2(len(embeddings.embed_query("hello world")))
-vector_store = FAISS(
-    embedding_function=embeddings,
-    index=index,
-    docstore=InMemoryDocstore(),
-    index_to_docstore_id={},
-)
+    #Reading the blog .txt file
+    with open("blogs/blog 2.txt", "r", encoding="utf-8") as file:
+        text = file.read()
 
-#Reading the blog .txt file
-with open("blogs/blog 2.txt", "r", encoding="utf-8") as file:
-    text = file.read()
+    #Cleaning up the read file
+    # Cleaning up the read file
+    sentences = [s.strip() + '.' for s in re.split(r'\.\s*', text) if s]
 
-#Cleaning up the read file
-sentences=[s.strip() + '.' for s in re.split(r'\.\s*', text) if s]
+    chunks = []
+    current_chunk = []
+    current_word_count = 0
+    for sentence in sentences:
+        word_count = len(sentence.split())
+        if current_word_count + word_count <= 200:
+            current_chunk.append(sentence)
+            current_word_count += word_count
+        else:
+            # Commit current chunk and start a new one
+            chunks.append(' '.join(current_chunk))
+            current_chunk = [sentence]
+            current_word_count = word_count
 
-chunks = []
-current_chunk = []
-current_word_count = 0
-for sentence in sentences:
-       word_count = len(sentence.split())
-       if current_word_count + word_count <= 200:
-           current_chunk.append(sentence)
-           current_word_count += word_count
-       else:
-           # Commit current chunk and start a new one
-           chunks.append(' '.join(current_chunk))
-           current_chunk = [sentence]
-           current_word_count = word_count
+    if current_chunk:
+        chunks.append(' '.join(current_chunk))
+    #Converts the list into a dictionary
+    documents = [None] * len(chunks)  # Create an empty list of the correct size
 
-if current_chunk:
-    chunks.append(' '.join(current_chunk))
+    #Converts the list into a dictionary
+    for i in range(len(chunks)):
+        documents[i] = Document(page_content=chunks[i])
 
-documents = [None] * len(chunks)  # Create an empty list of the correct size
+    uuids = [str(uuid4()) for _ in range(len(documents))]
 
-#Converts the list into a dictionary
-for i in range(len(chunks)):
-   documents[i] = Document(page_content=chunks[i])
+    vector_store.add_documents(documents=documents, ids=uuids)
 
-uuids = [str(uuid4()) for _ in range(len(documents))]
+    #Saves vector store
+    vector_store.save_local("faiss_index_dir")
 
-vector_store.add_documents(documents=documents, ids=uuids)
+    #Loads the vector store
+    loaded_vector_store = FAISS.load_local(
+    "faiss_index_dir",
+    embeddings, allow_dangerous_deserialization=True
+    )
 
-#Saves vector store
-vector_store.save_local("faiss_index_dir")
+    retrieve = loaded_vector_store.as_retriever(search_type="mmr", search_kwargs={"k": 3})
 
-#Loads the vector store
-loaded_vector_store = FAISS.load_local(
-"faiss_index_dir",
-embeddings, allow_dangerous_deserialization=True
-)
+    model_version = "gpt2"
+    tokenizer = AutoTokenizer.from_pretrained(model_version)
+    model = AutoModelForCausalLM.from_pretrained(model_version)
 
-retriever = loaded_vector_store.as_retriever(search_type="mmr", search_kwargs={"k": 2})
+    # Create a Hugging Face pipeline for text generation
+    pipe = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        max_new_tokens=256,
+        temperature=0.5
+    )
+    # Wrap the pipeline for LangChain compatibility
+    lm = HuggingFacePipeline(pipeline=pipe)
+    return retrieve, lm
 
-model_version = "gpt2"
-tokenizer = AutoTokenizer.from_pretrained(model_version)
-model = AutoModelForCausalLM.from_pretrained(model_version)
+retriever, llm = main_code()
 
-# Create a Hugging Face pipeline for text generation
-pipe = pipeline(
-    "text-generation",
-    model=model,
-    tokenizer=tokenizer,
-    max_new_tokens=256,
-    temperature=0.6
-)
-# Wrap the pipeline for LangChain compatibility
-llm = HuggingFacePipeline(pipeline=pipe)
 # Define the Prompt Template
 template = """You are a helpful assistant. Use the context below to answer the user's question.
 
@@ -116,11 +123,18 @@ st.title("📚 Your Personal Knowledge Chatbot")
 if "history" not in st.session_state:
     st.session_state.history = []
 
+if "last_query" not in st.session_state:
+    st.session_state.last_query = ""
 
 query = st.text_input("Ask something from your content:")
-if query.strip():
+if query != st.session_state.last_query:
     response = get_answer(query)
     st.session_state.history.append((query, response))
+    st.session_state.last_query = query
+#query = st.text_input("Ask something from your content:")
+#if query:
+#    response = get_answer(query)
+#    st.session_state.history.append((query, response))
 
 for q, r in reversed(st.session_state.history):
     st.markdown(f"**You:** {q}")
