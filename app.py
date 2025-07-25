@@ -131,10 +131,6 @@ if query != st.session_state.last_query:
     response = get_answer(query)
     st.session_state.history.append((query, response))
     st.session_state.last_query = query
-#query = st.text_input("Ask something from your content:")
-#if query:
-#    response = get_answer(query)
-#    st.session_state.history.append((query, response))
 
 for q, r in reversed(st.session_state.history):
     st.markdown(f"**You:** {q}")
